@@ -4,7 +4,8 @@
 # File: clientparser/config.py
 # ----------------------------------------------------------------------------------
 # Purpose:
-# This is the main entry point for the Client Parser application.
+# This is the main configuration file for the Client Parser application. It uses
+# the dotenv package to load environment variables from a .env file.
 # ----------------------------------------------------------------------------------
 # Author: Christofanis Skordas
 #
