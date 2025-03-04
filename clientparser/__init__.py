@@ -41,7 +41,7 @@ class ClientParser:
             for lease in current_scope.stdout.splitlines():
                 if lease.startswith("1"):
                     # Split the lease into parts
-                    lease_parts = re.split(r"-(N|U)-", lease, maxsplit=1)
+                    lease_parts = re.split(r"-(N|U|D)-", lease, maxsplit=1)
 
                     if len(lease_parts) > 1:
                         small_lease_parts = lease_parts[0].split("-")
