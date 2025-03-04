@@ -49,8 +49,13 @@ class ClientParser:
                         # Get the IP address, MAC address, lease status, hostname, and timestamp
                         ip_address = small_lease_parts[0].strip()
                         mac_address = ":".join(part.strip().upper() for part in small_lease_parts[2:-1])
+
+                        # Check if the MAC address is longer than the normal length (17 characters)
+                        if len(mac_address) > 17:
+                            mac_address = mac_address + ":XX"
+
                         lease_status = small_lease_parts[-1].strip()
-                        hostname = lease_parts[2].strip().split(".")[0].lower()
+                        hostname = lease_parts[2].strip().split(".")[0].lower()s
                         timestamp = datetime.now()
 
                         # Get the model class based on the scope
