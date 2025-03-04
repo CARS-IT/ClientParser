@@ -90,6 +90,7 @@ class DHCPModel(Base):
     mac_address = Column(String(26), nullable=False, unique=True)
     lease_status = Column(String(255), nullable=False)
     hostname = Column(String(255), nullable=True)
+    subnet = Column(String(15), nullable=False)
     timestamp = Column(DateTime, nullable=False)
 
     @classmethod

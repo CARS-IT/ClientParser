@@ -55,7 +55,8 @@ class ClientParser:
                             mac_address = mac_address + ":XX"
 
                         lease_status = small_lease_parts[-1].strip()
-                        hostname = lease_parts[2].strip().split(".")[0].lower()s
+                        hostname = lease_parts[2].strip().split(".")[0].lower()
+                        subnet = scope.split()[0]
                         timestamp = datetime.now()
 
                         # Get the model class based on the scope
@@ -68,6 +69,7 @@ class ClientParser:
                                 mac_address=mac_address,
                                 lease_status=lease_status,
                                 hostname=hostname,
+                                subnet=subnet,
                                 timestamp=timestamp,
                             )
 
