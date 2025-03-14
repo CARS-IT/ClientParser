@@ -19,6 +19,9 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 
 from clientparser.config import Config
 
+__all__ = ["initialize_and_create_tables", "session_scope", "DHCPModel", "DNSModel" "DBException"]
+
+
 config = Config()
 
 # Create a declarative base
@@ -56,6 +59,7 @@ def session_scope():
 def initialize_and_create_tables() -> None:
     """Initialize the database and create tables."""
     db_engine, db_session, Base = initialize_db()
+    dns_model = DNSModel()
     dhcp_models = DHCPModel.create_dhcp_models(config.scopes)
 
     for model in dhcp_models:
@@ -63,6 +67,10 @@ def initialize_and_create_tables() -> None:
         model.__table__.drop(bind=db_engine, checkfirst=True)  
         # Create the table
         model.__table__.create(bind=db_engine, checkfirst=True)
+
+    # Drop and create the DNS table
+    dns_model.__table__.drop(bind=db_engine, checkfirst=True)
+    dns_model.__table__.create(bind=db_engine, checkfirst=True)
 
 
 class DHCPModel(Base):
@@ -102,6 +110,18 @@ class DHCPModel(Base):
             model = type(class_name, (cls,), {"scope": scope})
             models.append(model)
         return models
+    
+
+class DNSModel(Base):
+    """DNS model for storing DNS records."""
+    __tablename__ = "dns_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    hostname = Column(String(255), nullable=False)
+    record_type = Column(String(10), nullable=False)
+    data = Column(String(255), nullable=False)
+    timestamp = Column(DateTime, nullable=False)
 
 
 class DBException(Exception):

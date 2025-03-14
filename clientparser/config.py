@@ -34,11 +34,15 @@ class Config:
 
     _scopes: List[str] = field(init=False, compare=False, repr=False)
     _dhcp_server: str = field(init=False, compare=False, repr=False)
+    _dns_server: str = field(init=False, compare=False, repr=False)
+    _dns_zone: str = field(init=False, compare=False, repr=False)
     _database_uri: str = field(init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         self._scopes = (os.getenv("SCOPES").replace("[", "").replace("]", "").replace(" ", "").split(","))
         self._dhcp_server = os.getenv("DHCP_SERVER")
+        self._dns_server = os.getenv("DNS_SERVER")
+        self._dns_zone = os.getenv("DNS_ZONE")
         self._database_uri = os.getenv("DATABASE_URI")
 
     @property
@@ -48,6 +52,14 @@ class Config:
     @property
     def dhcp_server(self) -> str:
         return self._dhcp_server
+    
+    @property
+    def dns_server(self) -> str:
+        return self._dns_server
+    
+    @property
+    def dns_zone(self) -> str:
+        return self._dns_zone
 
     @property
     def database_uri(self) -> str:
