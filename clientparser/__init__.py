@@ -84,8 +84,8 @@ class ClientParser:
     def _get_dns_data(self) -> None:
         """Get the DNS data and save it to the database."""
         
-        # Define the PowerShell commands to get the DNS records
-        forward_lookup_zones_powershell_command = f"""
+        # Define the PowerShell command to get the DNS records
+        forward_lookup_zone_powershell_command = f"""
             $Report = [System.Collections.Generic.List[Object]]::new()
             $zoneName = '{self.config.dns_zone}'
             $serverName = '{self.config.dns_server}'
@@ -117,16 +117,16 @@ class ClientParser:
             $Report | ConvertTo-Json 
         """
 
-        # Run the powershell command for the forward lookup zone
-        dns_records = subprocess.run(["powershell", "-Command", forward_lookup_zones_powershell_command], capture_output=True, text=True)
+        # Run the powershell command
+        dns_records = subprocess.run(["powershell", "-Command", forward_lookup_zone_powershell_command], capture_output=True, text=True)
 
         # Parse the JSON output from PowerShell
         for record in json.loads(dns_records.stdout):
                 
             name = record.get("Name", "").strip()
-            hostname = record.get("Data", "").strip()
+            hostname = record.get("Hostname", "").strip()
             record_type = record.get("Type", "").strip()
-            data = str(record.get("Hostname", "")).strip()
+            data = str(record.get("Data", "")).strip()
             timestamp = datetime.now()
 
             # Create a new DNS entry
@@ -157,14 +157,7 @@ class ClientParser:
                 foreach ($info in $zoneInfo) {{
 
                 $recordData = switch ($info.RecordType) {{
-                    'A'         {{ $info.RecordData.IPv4Address.IPAddressToString }}
-                    'AAAA'      {{ $info.RecordData.IPv6Address.IPAddressToString }}
-                    'CNAME'     {{ $info.RecordData.HostNameAlias }}
-                    'MX'        {{ $info.RecordData.MailExchange }}
-                    'NS'        {{ $info.RecordData.NameServer }}
                     'PTR'       {{ $info.RecordData.PtrDomainName }}
-                    'SRV'       {{ "$($info.RecordData.Target) $($info.RecordData.Port)" }}
-                    'TXT'       {{ -join $info.RecordData.DescriptiveText }}
                     default     {{ $null }}
                 }}
 
@@ -186,17 +179,20 @@ class ClientParser:
             for record in json.loads(reverse_dns_records.stdout):
                 
                 name = record.get("Name", "").strip()
-                hostname = record.get("Data", "").strip()
+                hostname = record.get("Hostname", "").strip()
                 record_type = record.get("Type", "").strip()
-                data = str(record.get("Hostname", "")).strip()
+                data = str(record.get("Data", "")).strip()
                 timestamp = datetime.now()
+
+                # Reverse the IP address dynamically
+                reversed_ip = ".".join(reversed(zone[:-13].split(".")))
 
                 # Create a new DNS entry
                 new_entry = DNSModel(
                     name=name,
-                    hostname=hostname,
+                    hostname=data,
                     record_type=record_type,
-                    data=data,
+                    data=f"{reversed_ip}.{hostname}",
                     timestamp=timestamp
                 )
 
