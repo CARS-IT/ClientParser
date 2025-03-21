@@ -197,6 +197,10 @@ class ClientParser:
                         # Reverse the IP address dynamically
                         reversed_ip = ".".join(reversed(zone[:-13].split(".")))
 
+                        # Remove the trailing froward zone name from the data
+                        if data.lower().endswith(f".{self.config.dns_zone.lower()}."):
+                            data = data[:-len(self.config.dns_zone) - 2]
+
                         # Create a new DNS entry
                         new_entry = DNSModel(
                             name=name,
