@@ -84,11 +84,8 @@ class ClientParser:
     def _get_dns_data(self) -> None:
         """Get the DNS data and save it to the database."""
         
-        # Define the powershell command
-        zone_name = "cars.aps.anl.gov"
-        server_name = "cars1"
-
-        powershell_command = f"""
+        # Define the PowerShell commands to get the DNS records
+        forward_lookup_zones_powershell_command = f"""
             $Report = [System.Collections.Generic.List[Object]]::new()
             $zoneName = '{self.config.dns_zone}'
             $serverName = '{self.config.dns_server}'
@@ -120,8 +117,8 @@ class ClientParser:
             $Report | ConvertTo-Json 
         """
 
-        # Run the powershell command
-        dns_records = subprocess.run(["powershell", "-Command", powershell_command], capture_output=True, text=True)
+        # Run the powershell command for the forward lookup zone
+        dns_records = subprocess.run(["powershell", "-Command", forward_lookup_zones_powershell_command], capture_output=True, text=True)
 
         # Parse the JSON output from PowerShell
         for record in json.loads(dns_records.stdout):
@@ -148,6 +145,67 @@ class ClientParser:
                 except Exception as e:
                     raise DBException(f"Error adding {name} to the database: {e}")
 
+        # Run the powershell command for the reverse lookup zones
+        for zone in self.config.dns_reverse_zones:
+
+            # Define the PowerShell command to get the reverse lookup zone
+            reverse_lookup_zones_powershell_command = f"""
+                $Report = [System.Collections.Generic.List[Object]]::new()
+                $zoneName = '{zone}'
+                $serverName = '{self.config.dns_server}'
+                $zoneInfo = Get-DnsServerResourceRecord -ComputerName $serverName -ZoneName $zoneName
+                foreach ($info in $zoneInfo) {{
+
+                $recordData = switch ($info.RecordType) {{
+                    'A'         {{ $info.RecordData.IPv4Address.IPAddressToString }}
+                    'AAAA'      {{ $info.RecordData.IPv6Address.IPAddressToString }}
+                    'CNAME'     {{ $info.RecordData.HostNameAlias }}
+                    'MX'        {{ $info.RecordData.MailExchange }}
+                    'NS'        {{ $info.RecordData.NameServer }}
+                    'PTR'       {{ $info.RecordData.PtrDomainName }}
+                    'SRV'       {{ "$($info.RecordData.Target) $($info.RecordData.Port)" }}
+                    'TXT'       {{ -join $info.RecordData.DescriptiveText }}
+                    default     {{ $null }}
+                }}
+
+                $ReportLine = [PSCustomObject]@{{
+                    Name       = $zoneName
+                    Hostname   = $info.Hostname
+                    Type       = $info.RecordType
+                    Data       = $recordData
+                }}
+                $Report.Add($ReportLine)
+                }}
+
+                # Print the results in a table format
+                $Report | ConvertTo-Json 
+            """
+            reverse_dns_records = subprocess.run(["powershell", "-Command", reverse_lookup_zones_powershell_command], capture_output=True, text=True)
+
+            # Parse the JSON output from PowerShell
+            for record in json.loads(reverse_dns_records.stdout):
+                
+                name = record.get("Name", "").strip()
+                hostname = record.get("Data", "").strip()
+                record_type = record.get("Type", "").strip()
+                data = str(record.get("Hostname", "")).strip()
+                timestamp = datetime.now()
+
+                # Create a new DNS entry
+                new_entry = DNSModel(
+                    name=name,
+                    hostname=hostname,
+                    record_type=record_type,
+                    data=data,
+                    timestamp=timestamp
+                )
+
+                # Add the new entry to the database
+                with session_scope() as session:
+                    try:
+                        session.add(new_entry)
+                    except Exception as e:
+                        raise DBException(f"Error adding {name} to the database: {e}")
 
     def run(self) -> None:
         """Run the Client Parser application."""
