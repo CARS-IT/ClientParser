@@ -124,9 +124,9 @@ class ClientParser:
         for record in json.loads(dns_records.stdout):
                 
             name = record.get("Name", "").strip()
-            hostname = record.get("Hostname", "").strip()
+            hostname = record.get("Data", "").strip()
             record_type = record.get("Type", "").strip()
-            data = str(record.get("Data", "")).strip()
+            data = str(record.get("Hostname", "")).strip()
             timestamp = datetime.now()
 
             # Create a new DNS entry
