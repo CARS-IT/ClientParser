@@ -83,12 +83,10 @@ def drop_and_rename_table(temp_table_name: str, final_table_name: str):
         # Check if the final table exists and drop it
         if inspector.has_table(final_table_name):
             connection.execute(text(f"DROP TABLE {final_table_name}"))
-            print(f"Dropped existing table: {final_table_name}")
 
         # Check if the temp table exists before renaming
         if inspector.has_table(temp_table_name):
             connection.execute(text(f"ALTER TABLE {temp_table_name} RENAME TO {final_table_name}"))
-            print(f"Renamed table '{temp_table_name}' to '{final_table_name}'")
         else:
             raise RuntimeError(f"Temporary table '{temp_table_name}' does not exist. Cannot rename.")
 
