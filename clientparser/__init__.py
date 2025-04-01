@@ -19,7 +19,7 @@ import json
 from datetime import datetime, timedelta
 
 from clientparser.config import Config
-from clientparser.database import initialize_and_create_tables, session_scope, DHCPModel, DNSModel, DBException
+from clientparser.database import initialize_and_create_tables, session_scope, DHCPModel, DNSModel, DBException, drop_and_rename_table
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -233,6 +233,18 @@ class ClientParser:
                                 raise DBException(f"Error adding {name} to the database: {e}")
                 except Exception as e:
                     raise RuntimeError(f"Error processing zone {zone}: {e}")
+        
+    def _finalize_tables(self) -> None:
+        """Finalize the database tables by dropping the old tables and renaming the temp tables to their final names."""
+
+        # DHCP tables
+        for scope in self.config.scopes:
+            temp_table_name = f"temp_private_{scope.split('.')[2]}" if scope.startswith("10") else f"temp_public_{scope.split('.')[2]}"
+            final_table_name = temp_table_name.replace("temp_", "")
+            drop_and_rename_table(temp_table_name=temp_table_name, final_table_name=final_table_name)
+
+        # DNS table
+        drop_and_rename_table(temp_table_name="temp_dns_records", final_table_name="dns_records")
                 
 
     def _get_data(self, verbose: bool) -> None:
@@ -254,6 +266,9 @@ class ClientParser:
                     future.result()
                 except Exception as e:
                     raise RuntimeError(f"Error occurred during execution: {e}")
+                
+            # Drop the old tables and rename the temp tables to their final names
+            self._finalize_tables()
         
         if verbose:
             # Print the total runtime

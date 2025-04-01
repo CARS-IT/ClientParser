@@ -13,7 +13,7 @@
 # ----------------------------------------------------------------------------------
 
 from contextlib import contextmanager
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, text, inspect
 from sqlalchemy.ext.declarative import declared_attr, declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
@@ -74,6 +74,25 @@ def initialize_and_create_tables():
     dns_model.__table__.create(bind=db_engine, checkfirst=True)
 
 
+def drop_and_rename_table(temp_table_name: str, final_table_name: str):
+    """Drop the existing table with the final name (if it exists) and rename the temp table."""
+    global db_engine
+    inspector = inspect(db_engine)
+
+    with db_engine.connect() as connection:
+        # Check if the final table exists and drop it
+        if inspector.has_table(final_table_name):
+            connection.execute(text(f"DROP TABLE {final_table_name}"))
+            print(f"Dropped existing table: {final_table_name}")
+
+        # Check if the temp table exists before renaming
+        if inspector.has_table(temp_table_name):
+            connection.execute(text(f"ALTER TABLE {temp_table_name} RENAME TO {final_table_name}"))
+            print(f"Renamed table '{temp_table_name}' to '{final_table_name}'")
+        else:
+            raise RuntimeError(f"Temporary table '{temp_table_name}' does not exist. Cannot rename.")
+
+
 class DHCPModel(Base):
     """
     Abstract base class for DHCP models. Each subclass will have a table name
@@ -89,9 +108,9 @@ class DHCPModel(Base):
         it is considered private; otherwise, it is public.
         """
         if cls.scope.startswith("10"):
-            scope_name = f"private_{cls.scope.split('.')[2]}"
+            scope_name = f"temp_private_{cls.scope.split('.')[2]}"
         else:
-            scope_name = f"public_{cls.scope.split('.')[2]}"
+            scope_name = f"temp_public_{cls.scope.split('.')[2]}"
         return f"{scope_name}"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -121,7 +140,7 @@ class DHCPModel(Base):
 
 class DNSModel(Base):
     """DNS model for storing DNS records."""
-    __tablename__ = "dns_records"
+    __tablename__ = "temp_dns_records"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
