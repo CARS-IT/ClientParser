@@ -27,8 +27,9 @@ config = Config()
 # Create a declarative base
 Base = declarative_base()
 
-# Move the global declaration to the top
-global db_session
+# Declare global variables
+global db_engine, db_session
+db_engine = None
 db_session = None
 
 
@@ -55,9 +56,9 @@ def session_scope():
         db_session.close()
 
 
-
-def initialize_and_create_tables() -> None:
-    """Initialize the database and create tables."""
+def initialize_and_create_tables():
+    """Initialize the database connection and create tables."""
+    global db_engine, db_session, Base
     db_engine, db_session, Base = initialize_db()
     dns_model = DNSModel()
     dhcp_models = DHCPModel.create_dhcp_models(config.scopes)
@@ -101,14 +102,20 @@ class DHCPModel(Base):
     subnet = Column(String(15), nullable=False)
     timestamp = Column(DateTime, nullable=False)
 
+    # Cache for dynamically created models
+    _model_cache = {}
+
     @classmethod
     def create_dhcp_models(cls, scopes):
         """Create a list of DHCPModel classes for each scope in scopes."""
         models = []
         for scope in scopes:
-            class_name = f"DHCPModel_{scope.replace('.', '_')}"
-            model = type(class_name, (cls,), {"scope": scope})
-            models.append(model)
+            if scope not in cls._model_cache:
+                class_name = f"DHCPModel_{scope.replace('.', '_')}"
+                model = type(class_name, (cls,), {"scope": scope})
+                # Cache the model
+                cls._model_cache[scope] = model
+            models.append(cls._model_cache[scope])
         return models
     
 
