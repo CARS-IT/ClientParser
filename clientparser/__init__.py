@@ -14,8 +14,9 @@
 
 import subprocess
 import re
+import time
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from clientparser.config import Config
 from clientparser.database import initialize_and_create_tables, session_scope, DHCPModel, DNSModel, DBException
@@ -29,10 +30,12 @@ class ClientParser:
 
     config = Config()
 
-    def _get_dhcp_data(self) -> None:
+    def _get_dhcp_data(self, verbose: bool) -> None:
         """Get the DHCP data and save it to the database and/or an output file."""
 
         for scope in self.config.scopes:
+            if verbose:
+                print(f"Processing DHCP scope: {scope}")
             # Define the netsh command
             netsh_command = f"netsh dhcp server \\\\{self.config.dhcp_server} scope {scope} show clients 1"
 
@@ -75,16 +78,19 @@ class ClientParser:
                                 timestamp=timestamp,
                             )
 
-                        # Add the new entry to the database
-                        with session_scope() as session:
-                            try:
-                                session.add(new_entry)
-                            except Exception as e:
-                                raise DBException(f"Error adding {ip_address} to the database: {e}")
-                            
-    def _get_dns_forward_data(self) -> None:
+                            # Add the new entry to the database
+                            with session_scope() as session:
+                                try:
+                                    session.add(new_entry)
+                                except Exception as e:
+                                    raise DBException(f"Error adding {ip_address} to the database: {e}")
+
+    def _get_dns_forward_data(self, verbose: bool) -> None:
         """Gets the DNS forward lookup zone data and saves it to the database."""
         
+        if verbose:
+            print(f"Processing DNS forward lookup zone: {self.config.dns_zone}")
+
         # Define the PowerShell command to get the DNS records
         forward_lookup_zone_powershell_command = f"""
             $Report = [System.Collections.Generic.List[Object]]::new()
@@ -146,7 +152,7 @@ class ClientParser:
                 except Exception as e:
                     raise DBException(f"Error adding {name} to the database: {e}")
 
-    def _get_dns_reverse_data(self) -> None:
+    def _get_dns_reverse_data(self, verbose: bool) -> None:
         """Gets the DNS reverse lookup zone data and saves it to the database."""
         
         # Run PowerShell commands for all reverse lookup zones concurrently
@@ -185,6 +191,8 @@ class ClientParser:
             for future, zone in zip(futures, self.config.dns_reverse_zones):
                 try:
                     reverse_dns_records = future.result()
+                    if verbose:
+                        print(f"Processing reverse lookup zone: {zone}")
                     # Parse the JSON output from PowerShell
                     for record in json.loads(reverse_dns_records.stdout):
                         
@@ -197,7 +205,7 @@ class ClientParser:
                         # Reverse the IP address dynamically
                         reversed_ip = ".".join(reversed(zone[:-13].split(".")))
 
-                        # Remove the trailing froward zone name from the data
+                        # Remove the trailing forward zone name from the data
                         if data.lower().endswith(f".{self.config.dns_zone.lower()}."):
                             data = data[:-len(self.config.dns_zone) - 2]
 
@@ -218,9 +226,10 @@ class ClientParser:
                                 raise DBException(f"Error adding {name} to the database: {e}")
                 except Exception as e:
                     raise RuntimeError(f"Error processing zone {zone}: {e}")
+                
 
-    def run(self) -> None:
-        """Run the Client Parser application."""
+    def _get_data(self, verbose: bool) -> None:
+        """Get the DHCP and DNS data and save it to the database."""
         # Set the start time
         start_time = datetime.now()
         # Initialize the database connection and create tables
@@ -229,15 +238,49 @@ class ClientParser:
         # Run DHCP and DNS data collection concurrently
         with ThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(self._get_dhcp_data),
-                executor.submit(self._get_dns_forward_data),
-                executor.submit(self._get_dns_reverse_data)
+                executor.submit(self._get_dhcp_data, verbose),
+                executor.submit(self._get_dns_forward_data, verbose),
+                executor.submit(self._get_dns_reverse_data, verbose)
             ]
             for future in futures:
                 try:
                     future.result()
                 except Exception as e:
                     raise RuntimeError(f"Error occurred during execution: {e}")
+        
+        if verbose:
+            # Print the total runtime
+            print(f"Total runtime: {datetime.now() - start_time}")
 
-        # Print the total runtime
-        print(f"Total runtime: {datetime.now() - start_time}")
+    def run(self, verbose: bool, interval: int) -> None:
+        """Run the Client Parser application loop."""
+
+        # Create a loop that runs the application every 5 minutes
+        is_last_run = False
+        last_runtime: datetime = datetime.now()
+
+        while not is_last_run:
+
+            # Check if the interval is set
+            if interval == 0:
+                is_last_run = True
+                # Get the data
+                self._get_data(verbose=verbose)
+            
+            elif (datetime.now() - last_runtime).seconds >= interval:
+                last_runtime = datetime.now()
+                # Get the data
+                self._get_data(verbose=verbose)
+
+                # Update the last runtime
+                last_runtime = datetime.now()
+
+            # Display the next runtime
+            if interval != 0:
+                next_runtime = last_runtime + timedelta(seconds=interval)
+
+                if verbose:
+                    print(f"Next run in {(next_runtime - datetime.now()).seconds} seconds")
+
+                # Sleep for a second
+                time.sleep(1)
