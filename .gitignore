@@ -36,3 +36,7 @@ logs/
 
 # Sensitive data
 .env
+
+# Run scripts
+*.bat
+*.ps1

@@ -14,11 +14,12 @@
 
 import subprocess
 import re
+import time
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from clientparser.config import Config
-from clientparser.database import initialize_and_create_tables, session_scope, DHCPModel, DNSModel, DBException
+from clientparser.database import initialize_and_create_tables, session_scope, DHCPModel, DNSModel, DBException, drop_and_rename_table
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -29,62 +30,74 @@ class ClientParser:
 
     config = Config()
 
-    def _get_dhcp_data(self) -> None:
+    def _get_dhcp_data(self, verbose: bool) -> None:
         """Get the DHCP data and save it to the database and/or an output file."""
+        
+        # Run DHCP commands for all scopes concurrently
+        with ThreadPoolExecutor() as executor:
+            futures = []
+            for scope in self.config.scopes:
+                # Define the netsh command
+                netsh_command = f"netsh dhcp server \\\\{self.config.dhcp_server} scope {scope} show clients 1"
+                # Submit the command to the executor
+                futures.append(executor.submit(subprocess.run, netsh_command, shell=True, capture_output=True, text=True))
 
-        for scope in self.config.scopes:
-            # Define the netsh command
-            netsh_command = f"netsh dhcp server \\\\{self.config.dhcp_server} scope {scope} show clients 1"
+            for future, scope in zip(futures, self.config.scopes):
+                try:
+                    current_scope = future.result()
+                    if verbose:
+                        print(f"Processing DHCP scope: {scope}")
+                    # Filter the DHCP export command
+                    for lease in current_scope.stdout.splitlines():
+                        if lease.startswith("1"):
+                            # Split the lease into parts
+                            lease_parts = re.split(r"-(N|U|D)-", lease, maxsplit=1)
 
-            # Run the netsh command
-            current_scope = subprocess.run(netsh_command, shell=True, capture_output=True, text=True)
+                            if len(lease_parts) > 1:
+                                small_lease_parts = lease_parts[0].split("-")
 
-            # Filter the DHCP export command
-            for lease in current_scope.stdout.splitlines():
-                if lease.startswith("1"):
-                    # Split the lease into parts
-                    lease_parts = re.split(r"-(N|U|D)-", lease, maxsplit=1)
+                                # Get the IP address, MAC address, lease status, hostname, and timestamp
+                                ip_address = small_lease_parts[0].strip()
+                                mac_address = ":".join(part.strip().upper() for part in small_lease_parts[2:-1])
 
-                    if len(lease_parts) > 1:
-                        small_lease_parts = lease_parts[0].split("-")
+                                # Check if the MAC address is longer than the normal length (17 characters)
+                                if len(mac_address) > 17:
+                                    mac_address = mac_address + ":XX"
 
-                        # Get the IP address, MAC address, lease status, hostname, and timestamp
-                        ip_address = small_lease_parts[0].strip()
-                        mac_address = ":".join(part.strip().upper() for part in small_lease_parts[2:-1])
+                                lease_status = small_lease_parts[-1].strip()
+                                hostname = lease_parts[2].strip().split(".")[0].lower()
+                                subnet = scope.split()[0]
+                                timestamp = datetime.now()
 
-                        # Check if the MAC address is longer than the normal length (17 characters)
-                        if len(mac_address) > 17:
-                            mac_address = mac_address + ":XX"
+                                                                # Get the model class based on the scope
+                                model_class = next((model for model in DHCPModel.create_dhcp_models([scope]) if model.scope == scope), None,)
 
-                        lease_status = small_lease_parts[-1].strip()
-                        hostname = lease_parts[2].strip().split(".")[0].lower()
-                        subnet = scope.split()[0]
-                        timestamp = datetime.now()
+                                # Create a new entry
+                                if model_class:
+                                    new_entry = model_class(
+                                        ip=ip_address,
+                                        mac_address=mac_address,
+                                        lease_status=lease_status,
+                                        hostname=hostname,
+                                        subnet=subnet,
+                                        timestamp=timestamp,
+                                    )
 
-                        # Get the model class based on the scope
-                        model_class = next((model for model in DHCPModel.create_dhcp_models([scope]) if model.scope == scope), None,)
+                                    # Add the new entry to the database
+                                    with session_scope() as session:
+                                        try:
+                                            session.add(new_entry)
+                                        except Exception as e:
+                                            raise DBException(f"Error adding {ip_address} to the database: {e}")
+                except Exception as e:
+                    raise RuntimeError(f"Error processing scope {scope}: {e}")
 
-                        # Create a new entry
-                        if model_class:
-                            new_entry = model_class(
-                                ip=ip_address,
-                                mac_address=mac_address,
-                                lease_status=lease_status,
-                                hostname=hostname,
-                                subnet=subnet,
-                                timestamp=timestamp,
-                            )
-
-                        # Add the new entry to the database
-                        with session_scope() as session:
-                            try:
-                                session.add(new_entry)
-                            except Exception as e:
-                                raise DBException(f"Error adding {ip_address} to the database: {e}")
-                            
-    def _get_dns_forward_data(self) -> None:
+    def _get_dns_forward_data(self, verbose: bool) -> None:
         """Gets the DNS forward lookup zone data and saves it to the database."""
         
+        if verbose:
+            print(f"Processing DNS forward lookup zone: {self.config.dns_zone}")
+
         # Define the PowerShell command to get the DNS records
         forward_lookup_zone_powershell_command = f"""
             $Report = [System.Collections.Generic.List[Object]]::new()
@@ -146,7 +159,7 @@ class ClientParser:
                 except Exception as e:
                     raise DBException(f"Error adding {name} to the database: {e}")
 
-    def _get_dns_reverse_data(self) -> None:
+    def _get_dns_reverse_data(self, verbose: bool) -> None:
         """Gets the DNS reverse lookup zone data and saves it to the database."""
         
         # Run PowerShell commands for all reverse lookup zones concurrently
@@ -185,6 +198,8 @@ class ClientParser:
             for future, zone in zip(futures, self.config.dns_reverse_zones):
                 try:
                     reverse_dns_records = future.result()
+                    if verbose:
+                        print(f"Processing reverse lookup zone: {zone}")
                     # Parse the JSON output from PowerShell
                     for record in json.loads(reverse_dns_records.stdout):
                         
@@ -197,7 +212,7 @@ class ClientParser:
                         # Reverse the IP address dynamically
                         reversed_ip = ".".join(reversed(zone[:-13].split(".")))
 
-                        # Remove the trailing froward zone name from the data
+                        # Remove the trailing forward zone name from the data
                         if data.lower().endswith(f".{self.config.dns_zone.lower()}."):
                             data = data[:-len(self.config.dns_zone) - 2]
 
@@ -218,9 +233,22 @@ class ClientParser:
                                 raise DBException(f"Error adding {name} to the database: {e}")
                 except Exception as e:
                     raise RuntimeError(f"Error processing zone {zone}: {e}")
+        
+    def _finalize_tables(self) -> None:
+        """Finalize the database tables by dropping the old tables and renaming the temp tables to their final names."""
 
-    def run(self) -> None:
-        """Run the Client Parser application."""
+        # DHCP tables
+        for scope in self.config.scopes:
+            temp_table_name = f"temp_private_{scope.split('.')[2]}" if scope.startswith("10") else f"temp_public_{scope.split('.')[2]}"
+            final_table_name = temp_table_name.replace("temp_", "")
+            drop_and_rename_table(temp_table_name=temp_table_name, final_table_name=final_table_name)
+
+        # DNS table
+        drop_and_rename_table(temp_table_name="temp_dns_records", final_table_name="dns_records")
+                
+
+    def _get_data(self, verbose: bool) -> None:
+        """Get the DHCP and DNS data and save it to the database."""
         # Set the start time
         start_time = datetime.now()
         # Initialize the database connection and create tables
@@ -229,15 +257,52 @@ class ClientParser:
         # Run DHCP and DNS data collection concurrently
         with ThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(self._get_dhcp_data),
-                executor.submit(self._get_dns_forward_data),
-                executor.submit(self._get_dns_reverse_data)
+                executor.submit(self._get_dhcp_data, verbose),
+                executor.submit(self._get_dns_forward_data, verbose),
+                executor.submit(self._get_dns_reverse_data, verbose)
             ]
             for future in futures:
                 try:
                     future.result()
                 except Exception as e:
                     raise RuntimeError(f"Error occurred during execution: {e}")
+                
+            # Drop the old tables and rename the temp tables to their final names
+            self._finalize_tables()
+        
+        if verbose:
+            # Print the total runtime
+            print(f"Total runtime: {datetime.now() - start_time}")
 
-        # Print the total runtime
-        print(f"Total runtime: {datetime.now() - start_time}")
+    def run(self, verbose: bool, interval: int) -> None:
+        """Run the Client Parser application loop."""
+
+        # Create a loop that runs the application every 5 minutes
+        is_last_run = False
+        last_runtime: datetime = datetime.now()
+
+        while not is_last_run:
+
+            # Check if the interval is set
+            if interval == 0:
+                is_last_run = True
+                # Get the data
+                self._get_data(verbose=verbose)
+            
+            elif (datetime.now() - last_runtime).seconds >= interval:
+                last_runtime = datetime.now()
+                # Get the data
+                self._get_data(verbose=verbose)
+
+                # Update the last runtime
+                last_runtime = datetime.now()
+
+            # Display the next runtime
+            if interval != 0:
+                next_runtime = last_runtime + timedelta(seconds=interval)
+
+                if verbose:
+                    print(f"Next run in {(next_runtime - datetime.now()).seconds} seconds")
+
+                # Sleep for a second
+                time.sleep(1)

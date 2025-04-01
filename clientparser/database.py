@@ -13,7 +13,7 @@
 # ----------------------------------------------------------------------------------
 
 from contextlib import contextmanager
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, text, inspect
 from sqlalchemy.ext.declarative import declared_attr, declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
@@ -27,8 +27,9 @@ config = Config()
 # Create a declarative base
 Base = declarative_base()
 
-# Move the global declaration to the top
-global db_session
+# Declare global variables
+global db_engine, db_session
+db_engine = None
 db_session = None
 
 
@@ -55,9 +56,9 @@ def session_scope():
         db_session.close()
 
 
-
-def initialize_and_create_tables() -> None:
-    """Initialize the database and create tables."""
+def initialize_and_create_tables():
+    """Initialize the database connection and create tables."""
+    global db_engine, db_session, Base
     db_engine, db_session, Base = initialize_db()
     dns_model = DNSModel()
     dhcp_models = DHCPModel.create_dhcp_models(config.scopes)
@@ -71,6 +72,23 @@ def initialize_and_create_tables() -> None:
     # Drop and create the DNS table
     dns_model.__table__.drop(bind=db_engine, checkfirst=True)
     dns_model.__table__.create(bind=db_engine, checkfirst=True)
+
+
+def drop_and_rename_table(temp_table_name: str, final_table_name: str):
+    """Drop the existing table with the final name (if it exists) and rename the temp table."""
+    global db_engine
+    inspector = inspect(db_engine)
+
+    with db_engine.connect() as connection:
+        # Check if the final table exists and drop it
+        if inspector.has_table(final_table_name):
+            connection.execute(text(f"DROP TABLE {final_table_name}"))
+
+        # Check if the temp table exists before renaming
+        if inspector.has_table(temp_table_name):
+            connection.execute(text(f"ALTER TABLE {temp_table_name} RENAME TO {final_table_name}"))
+        else:
+            raise RuntimeError(f"Temporary table '{temp_table_name}' does not exist. Cannot rename.")
 
 
 class DHCPModel(Base):
@@ -88,9 +106,9 @@ class DHCPModel(Base):
         it is considered private; otherwise, it is public.
         """
         if cls.scope.startswith("10"):
-            scope_name = f"private_{cls.scope.split('.')[2]}"
+            scope_name = f"temp_private_{cls.scope.split('.')[2]}"
         else:
-            scope_name = f"public_{cls.scope.split('.')[2]}"
+            scope_name = f"temp_public_{cls.scope.split('.')[2]}"
         return f"{scope_name}"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -101,20 +119,26 @@ class DHCPModel(Base):
     subnet = Column(String(15), nullable=False)
     timestamp = Column(DateTime, nullable=False)
 
+    # Cache for dynamically created models
+    _model_cache = {}
+
     @classmethod
     def create_dhcp_models(cls, scopes):
         """Create a list of DHCPModel classes for each scope in scopes."""
         models = []
         for scope in scopes:
-            class_name = f"DHCPModel_{scope.replace('.', '_')}"
-            model = type(class_name, (cls,), {"scope": scope})
-            models.append(model)
+            if scope not in cls._model_cache:
+                class_name = f"DHCPModel_{scope.replace('.', '_')}"
+                model = type(class_name, (cls,), {"scope": scope})
+                # Cache the model
+                cls._model_cache[scope] = model
+            models.append(cls._model_cache[scope])
         return models
     
 
 class DNSModel(Base):
     """DNS model for storing DNS records."""
-    __tablename__ = "dns_records"
+    __tablename__ = "temp_dns_records"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
