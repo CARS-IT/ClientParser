@@ -32,58 +32,67 @@ class ClientParser:
 
     def _get_dhcp_data(self, verbose: bool) -> None:
         """Get the DHCP data and save it to the database and/or an output file."""
+        
+        # Run DHCP commands for all scopes concurrently
+        with ThreadPoolExecutor() as executor:
+            futures = []
+            for scope in self.config.scopes:
+                # Define the netsh command
+                netsh_command = f"netsh dhcp server \\\\{self.config.dhcp_server} scope {scope} show clients 1"
+                if verbose:
+                    print(f"Submitting DHCP command for scope: {scope}")
+                # Submit the command to the executor
+                futures.append(executor.submit(subprocess.run, netsh_command, shell=True, capture_output=True, text=True))
 
-        for scope in self.config.scopes:
-            if verbose:
-                print(f"Processing DHCP scope: {scope}")
-            # Define the netsh command
-            netsh_command = f"netsh dhcp server \\\\{self.config.dhcp_server} scope {scope} show clients 1"
+            for future, scope in zip(futures, self.config.scopes):
+                try:
+                    current_scope = future.result()
+                    if verbose:
+                        print(f"Processing DHCP scope: {scope}")
+                    # Filter the DHCP export command
+                    for lease in current_scope.stdout.splitlines():
+                        if lease.startswith("1"):
+                            # Split the lease into parts
+                            lease_parts = re.split(r"-(N|U|D)-", lease, maxsplit=1)
 
-            # Run the netsh command
-            current_scope = subprocess.run(netsh_command, shell=True, capture_output=True, text=True)
+                            if len(lease_parts) > 1:
+                                small_lease_parts = lease_parts[0].split("-")
 
-            # Filter the DHCP export command
-            for lease in current_scope.stdout.splitlines():
-                if lease.startswith("1"):
-                    # Split the lease into parts
-                    lease_parts = re.split(r"-(N|U|D)-", lease, maxsplit=1)
+                                # Get the IP address, MAC address, lease status, hostname, and timestamp
+                                ip_address = small_lease_parts[0].strip()
+                                mac_address = ":".join(part.strip().upper() for part in small_lease_parts[2:-1])
 
-                    if len(lease_parts) > 1:
-                        small_lease_parts = lease_parts[0].split("-")
+                                # Check if the MAC address is longer than the normal length (17 characters)
+                                if len(mac_address) > 17:
+                                    mac_address = mac_address + ":XX"
 
-                        # Get the IP address, MAC address, lease status, hostname, and timestamp
-                        ip_address = small_lease_parts[0].strip()
-                        mac_address = ":".join(part.strip().upper() for part in small_lease_parts[2:-1])
+                                lease_status = small_lease_parts[-1].strip()
+                                hostname = lease_parts[2].strip().split(".")[0].lower()
+                                subnet = scope.split()[0]
+                                timestamp = datetime.now()
 
-                        # Check if the MAC address is longer than the normal length (17 characters)
-                        if len(mac_address) > 17:
-                            mac_address = mac_address + ":XX"
+                                                                # Get the model class based on the scope
+                                model_class = next((model for model in DHCPModel.create_dhcp_models([scope]) if model.scope == scope), None,)
 
-                        lease_status = small_lease_parts[-1].strip()
-                        hostname = lease_parts[2].strip().split(".")[0].lower()
-                        subnet = scope.split()[0]
-                        timestamp = datetime.now()
+                                # Create a new entry
+                                if model_class:
+                                    new_entry = model_class(
+                                        ip=ip_address,
+                                        mac_address=mac_address,
+                                        lease_status=lease_status,
+                                        hostname=hostname,
+                                        subnet=subnet,
+                                        timestamp=timestamp,
+                                    )
 
-                        # Get the model class based on the scope
-                        model_class = next((model for model in DHCPModel.create_dhcp_models([scope]) if model.scope == scope), None,)
-
-                        # Create a new entry
-                        if model_class:
-                            new_entry = model_class(
-                                ip=ip_address,
-                                mac_address=mac_address,
-                                lease_status=lease_status,
-                                hostname=hostname,
-                                subnet=subnet,
-                                timestamp=timestamp,
-                            )
-
-                            # Add the new entry to the database
-                            with session_scope() as session:
-                                try:
-                                    session.add(new_entry)
-                                except Exception as e:
-                                    raise DBException(f"Error adding {ip_address} to the database: {e}")
+                                    # Add the new entry to the database
+                                    with session_scope() as session:
+                                        try:
+                                            session.add(new_entry)
+                                        except Exception as e:
+                                            raise DBException(f"Error adding {ip_address} to the database: {e}")
+                except Exception as e:
+                    raise RuntimeError(f"Error processing scope {scope}: {e}")
 
     def _get_dns_forward_data(self, verbose: bool) -> None:
         """Gets the DNS forward lookup zone data and saves it to the database."""
