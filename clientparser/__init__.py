@@ -39,8 +39,6 @@ class ClientParser:
             for scope in self.config.scopes:
                 # Define the netsh command
                 netsh_command = f"netsh dhcp server \\\\{self.config.dhcp_server} scope {scope} show clients 1"
-                if verbose:
-                    print(f"Submitting DHCP command for scope: {scope}")
                 # Submit the command to the executor
                 futures.append(executor.submit(subprocess.run, netsh_command, shell=True, capture_output=True, text=True))
 
